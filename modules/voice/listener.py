@@ -14,9 +14,9 @@ audio_queue = queue.Queue()
 config.read("config/sounddevice.config") # load the file
 
 #loading values
-sample_rate = int(config['SAMPLE_RATE'])
-block_duration = float(config['BLOCK_DURATION'])
-channels = int(config['CHANNELS'])
+sample_rate = int(config['audio']['SAMPLE_RATE'])
+block_duration = float(config['audio']['BLOCK_DURATION'])
+channels = int(config['audio']['CHANNELS'])
 
 
 def audio_callback(indata, frames, time_info, status):
