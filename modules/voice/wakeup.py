@@ -1,23 +1,28 @@
 import sherpa_onnx
 import configparser
+import queue
+from listener import process_audio_stream, audio_queue
+
 
 # initializing configparser
 config = configparser.ConfigParser()
-config.read_file("/config/sherpa_onnx.config")
+config.read("config/sherpa_onnx.config")
 
 # loading value from cofing file
-tokens=config.TOKEN,
-encoder=config.ENCODER,
-decoder=config.DECODER,
-joiner=config.JOINER,
-num_threads=config.NUM_THREADS,
-max_active_paths=config.MAX_ACTIVE_PATHS,
-keywords_file=config.KEYWORDS_FILE,
-keywords_score=config.KEYWORD_SCORE,
-keywords_threshold=config.KEYWORD_THRESHOLD,
-num_trailing_blanks=config.NUM_TRAILING_BLANKS,
-provider=config.PROVIDER,
+sample_rate = int(config['kws']['SAMPLE_RATE'])
+tokens=str(config['kws']['TOKEN'])
+encoder=str(config['kws']['ENCODER'])
+decoder=str(config['kws']['DECODER'])
+joiner=str(config['kws']['JOINER'])
+num_threads=int(config['kws']['NUM_THREADS'])
+max_active_paths=int(config['kws']['MAX_ACTIVE_PATHS'])
+keywords_file=str(config['kws']['KEYWORDS_FILE'])
+keywords_score=float(config['kws']['KEYWORD_SCORE'])
+keywords_threshold=float(config['kws']['KEYWORD_THRESHOLD'])
+num_trailing_blanks=int(config['kws']['NUM_TRAILING_BLANKS'])
+provider=str(config['kws']['PROVIDER'])
 
+# instantiate the keyword spotter function from sherpa-onnx
 keyword_spotter = sherpa_onnx.KeywordSpotter(
     tokens= tokens,
     encoder= encoder,
@@ -31,3 +36,39 @@ keyword_spotter = sherpa_onnx.KeywordSpotter(
     num_trailing_blanks= num_trailing_blanks,
     provider= provider,
 )
+
+# instantiate stream for KWS 
+kws_stream = keyword_spotter.create_stream()
+
+device_stream = process_audio_stream()
+
+
+try:
+    print("Listening for keyword... (Ctrl+C to stop)")
+    while True:
+        try:
+            samples = audio_queue.get(timeout=0.1)
+        except queue.Empty:
+            continue
+            
+        # Flatten the 2D array into 1D array
+        samples = samples.reshape(-1)
+        # feed audio into  the sherpa-onnx decoder
+        kws_stream.accept_waveform(sample_rate, samples)
+            
+        # Check if the AI model has enough context window to evaluate the speech 
+        while keyword_spotter.is_ready(kws_stream):
+            keyword_spotter.decode_stream(kws_stream)
+                
+        # fetch detection results
+        result = keyword_spotter.get_result(kws_stream)
+        if result:
+            print(f"\n🎯 KEYWORD DETECTED: {result}")
+            kws_stream = keyword_spotter.create_stream()
+    
+except KeyboardInterrupt:
+    print("\n🛑 Execution stopped safely by user.")
+finally:
+    device_stream.stop()
+    device_stream.close()
+        
