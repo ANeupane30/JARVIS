@@ -1,7 +1,7 @@
 import sherpa_onnx
 import configparser
 import queue
-from listener import process_audio_stream, audio_queue
+from listener import start_audio_stream, audio_queue
 
 
 # initializing configparser
@@ -47,38 +47,27 @@ keyword_spotter = sherpa_onnx.KeywordSpotter(
 def kws():
     # instantiate stream for KWS 
     kws_stream = keyword_spotter.create_stream()
-    device_stream = process_audio_stream(sample_rate, channels, block_duration)
-    try:
-        print("Listening for keyword... (Ctrl+C to stop)")
-        while True:
-            try:
-                samples = audio_queue.get(timeout=0.1)
-            except queue.Empty:
-                continue
+    device_stream = start_audio_stream(sample_rate, channels, block_duration)   # remove this once a audio orchestration is completed
+    
+    while True:
+        try:
+            samples = audio_queue.get(timeout=0.1)
+        except queue.Empty:
+            continue
             
-            # Flatten the 2D array into 1D array
-            samples = samples.reshape(-1)
-            # feed audio into  the sherpa-onnx decoder
-            kws_stream.accept_waveform(sample_rate, samples)
+        # Flatten the 2D array into 1D array
+        samples = samples.reshape(-1)
+        # feed audio into  the sherpa-onnx decoder
+        kws_stream.accept_waveform(sample_rate, samples)
             
-            # Check if the AI model has enough context window to evaluate the speech 
-            while keyword_spotter.is_ready(kws_stream):
-                keyword_spotter.decode_stream(kws_stream)
+        # Check if the AI model has enough context window to evaluate the speech 
+        while keyword_spotter.is_ready(kws_stream):
+            keyword_spotter.decode_stream(kws_stream)
                 
-            # fetch detection results
-            result = keyword_spotter.get_result(kws_stream)
-            # return result <-- uncomment this and comment print when you complete Speech Recognition system
-            if result:
-                print(f"\n🎯 KEYWORD DETECTED: {result}")
-                kws_stream = keyword_spotter.create_stream()
-    except KeyboardInterrupt:
-        print("\n🛑 Execution stopped safely by user.")
-    finally: # closing the background audio process
-        device_stream.stop()
-        device_stream.close()
-        # print('Error')
+        # fetch detection results
+        result = keyword_spotter.get_result(kws_stream)
+        # return result #<-- uncomment this and comment print when you complete Speech Recognition system
+        if result:
+            return result
+                # kws_stream = keyword_spotter.create_stream()
 
-        
-
-test = kws()
-print(test)
