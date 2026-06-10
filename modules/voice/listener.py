@@ -8,15 +8,9 @@ stores short audio clips in queue for processing. Where as process_audio_stream(
 and sounddevice's background thread runs continuously in background and collect the audio clip. 
 """
 
-# # initializing the parser and Queue
-# config = configparser.ConfigParser()
+# # initializing  Queue
 audio_queue = queue.Queue()
-# config.read("config/sounddevice.config") # load the file
 
-# #loading values
-# sample_rate = int(config['audio']['SAMPLE_RATE'])
-# block_duration = float(config['audio']['BLOCK_DURATION'])
-# channels = int(config['audio']['CHANNELS'])
 
 
 def audio_callback(indata, frames, time_info, status):
@@ -26,7 +20,7 @@ def audio_callback(indata, frames, time_info, status):
     # putting a copy of the audio data into the queue
     audio_queue.put(indata.copy())
     
-def process_audio_stream(sample_rate, channels, block_duration):
+def start_audio_stream(sample_rate, channels, block_duration):
     """Start background audio stream. Returns the stream object."""
     #start the stream
     stream = sd.InputStream(
@@ -40,4 +34,9 @@ def process_audio_stream(sample_rate, channels, block_duration):
     #starting background listening
     stream.start()  # this line starts the sound device background thread. 
     return stream
-    
+
+def detect_silence(duration, block_duration):
+    silent_chunks = 0
+    chunks_per_sec = int(duration / block_duration)
+    silent_needed = int(silence_timeout * chunks_per_sec)
+    max_chunks = int(max_duration * chunks_per_sec)
