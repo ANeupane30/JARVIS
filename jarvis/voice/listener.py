@@ -11,6 +11,11 @@ and sounddevice's background thread runs continuously in background and collect 
 # # initializing  Queue
 audio_queue = queue.Queue()
 
+# config for detecting silence
+silence_timeout : float = 1.5   #stop after this many seconds of silence
+max_duration: float = 15.0     # safety cap for long audio
+threshold: float = 0.01
+
 
 
 def audio_callback(indata, frames, time_info, status):
@@ -34,9 +39,3 @@ def start_audio_stream(sample_rate, channels, block_duration):
     #starting background listening
     stream.start()  # this line starts the sound device background thread. 
     return stream
-
-def detect_silence(duration, block_duration):
-    silent_chunks = 0
-    chunks_per_sec = int(duration / block_duration)
-    silent_needed = int(silence_timeout * chunks_per_sec)
-    max_chunks = int(max_duration * chunks_per_sec)

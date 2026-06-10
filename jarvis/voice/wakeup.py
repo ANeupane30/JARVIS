@@ -47,7 +47,8 @@ keyword_spotter = sherpa_onnx.KeywordSpotter(
 def kws():
     # instantiate stream for KWS 
     kws_stream = keyword_spotter.create_stream()
-    device_stream = start_audio_stream(sample_rate, channels, block_duration)   # remove this once a audio orchestration is completed
+    print("KWS_Stream is on")
+    # device_stream = start_audio_stream(sample_rate, channels, block_duration)   # remove this once a audio orchestration is completed
     
     while True:
         try:
@@ -66,7 +67,7 @@ def kws():
                 
         # fetch detection results
         result = keyword_spotter.get_result(kws_stream)
-        # return result #<-- uncomment this and comment print when you complete Speech Recognition system
+        
         if result:
             return result
                 # kws_stream = keyword_spotter.create_stream()
