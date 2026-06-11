@@ -1,7 +1,7 @@
 import sherpa_onnx
 import configparser
 import queue
-from jarvis.component.listener import start_audio_stream, audio_queue
+from listener import start_audio_stream, audio_queue
 
 
 # initializing configparser
