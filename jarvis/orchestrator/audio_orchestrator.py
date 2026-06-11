@@ -1,6 +1,6 @@
-from listener import start_audio_stream, audio_queue
-from wakeup import kws
-from sr import listen_and_transcribe
+from jarvis.component.listener import start_audio_stream, audio_queue
+from jarvis.component.wakeup import kws
+from jarvis.component.transcriber import listen_and_transcribe
 import queue as q
 import configparser
 
@@ -42,7 +42,3 @@ def run():
     finally:
         device_stream.stop()
         device_stream.close()
-
-
-test = run()
-print(test)
