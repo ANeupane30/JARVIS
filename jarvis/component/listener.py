@@ -1,5 +1,4 @@
 import sounddevice as sd
-import configparser
 import queue
 
 """
@@ -10,13 +9,6 @@ and sounddevice's background thread runs continuously in background and collect 
 
 # # initializing  Queue
 audio_queue = queue.Queue()
-
-# config for detecting silence
-silence_timeout : float = 1.5   #stop after this many seconds of silence
-max_duration: float = 15.0     # safety cap for long audio
-threshold: float = 0.01
-
-
 
 def audio_callback(indata, frames, time_info, status):
     "This function is called for each audio block by sounddevice"
