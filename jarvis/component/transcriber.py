@@ -5,7 +5,7 @@ Before processing stored audio it concatinate them and process all at once.
 
 import numpy as np
 import queue
-from jarvis.component.listener import audio_queue
+from listener import audio_queue
 from faster_whisper import WhisperModel
 import numpy as np
 
