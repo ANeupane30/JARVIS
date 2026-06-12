@@ -1,6 +1,7 @@
 from jarvis.component.listener import start_audio_stream, audio_queue
 from jarvis.component.wakeup import kws
 from jarvis.component.transcriber import listen_and_transcribe
+from jarvis.component.speaker import speak, mp_running,speak_and_wait
 import queue as q
 import configparser
 
@@ -17,13 +18,16 @@ channels = int(config['kws_audio']['CHANNELS'])
 def run():
     # start once — never stopped between kws and sr
     device_stream = start_audio_stream(sample_rate, channels, block_duration)
+    pre_start_speak_process = mp_running()
     print('Listening....')
 
     try:
         while True:
             # kws reads from audio_queue
             keyword = kws()
-            print(f"Detected: {keyword}")
+            print("KWS Detected")
+            speak_and_wait("How can I help you", timeout = 10.0)
+            print('Alexa Speaked')
 
             # flush queue — discard the keyword audio itself so
             # whisper doesn't transcribe "hey jarvis" as the command
