@@ -1,55 +1,142 @@
-# 04 — Speech to Text
+# 04 — Speech to Text (Transcriber)
 
-**File:** `modules/voice/speech_to_text.py`
-**Status:** ✅ Written — not yet wired into the main flow
+**File:** `jarvis/component/transcriber.py`
+**Status:** ✅ Working — wired into the orchestrator
 **Library:** `faster-whisper`
+**Depends on:** `listener.py` (imports `audio_queue`)
 
 ---
 
 ## What This File Does
 
-This file provides a **single function** that takes raw audio bytes and returns a
-transcribed text string. It is the module that will convert what the user says (after
-the wake word) into text that the LLM brain can understand.
+This file provides the **speech capture and transcription pipeline**. After the wake word is
+detected, the orchestrator calls `listen_and_transcribe()`, which:
+1. Reads audio from `audio_queue` until silence is detected
+2. Concatenates all collected audio frames into one NumPy array
+3. Passes it to `speech_to_text()` which uses `faster-whisper` to transcribe
 
-It is currently **standalone** — the function exists and works, but `wakeup.py` does
-not call it yet. That wiring will happen in the orchestrator (`core/orchestrator.py`).
+The result is a plain text string of what the user said.
 
 ---
 
-## How It Works — Step by Step
+## Module-Level Constants & Model Loading
 
-### The Full Function
 ```python
-def speech_to_text(audio_data):
-    model_size = "base"
-    model = WhisperModel(model_size, device="cpu", compute_type="default")
+silence_timeout: float = 1.5   # seconds of silence before stopping capture
+max_duration:    float = 15.0  # maximum recording length in seconds
+threshold:       float = 0.01  # RMS energy below this = silence
 
-    segments, info = model.transcribe(io.BytesIO(audio_data), beam_size=5)
+model = WhisperModel('base', device="cpu", compute_type="default")
+```
 
+**The `WhisperModel` is loaded once at module import time.** This is a critical
+performance improvement — loading the model on every function call would take several
+seconds each time. Loading it once means the first call is slow but all subsequent calls
+are fast.
+
+---
+
+## Functions
+
+### `speech_to_text(audio_data: np.ndarray) → str`
+
+```python
+def speech_to_text(audio_data: np.ndarray):
     try:
-        for segment in segments:
-            text = segment.text
-        return text
-
+        segments, info = model.transcribe(audio_data, beam_size=5)
+        return " ".join(seg.text for seg in segments).strip()
     except Exception as e:
         return {"status": "error", "message": f"Error during transcription: {str(e)}"}
 ```
 
+**Input:** A `float32` NumPy array of audio samples at 16kHz, values in [-1.0, 1.0].
+
+**Key improvements over the original design:**
+- Accepts a NumPy array directly (no `io.BytesIO` wrapping needed — `faster-whisper` now supports this natively)
+- Joins **all segments** with spaces: `" ".join(seg.text for seg in segments).strip()`
+  (the original version only returned the **last** segment, losing earlier parts of longer speech)
+- Model is loaded once at module level (not inside the function)
+
+**Output:**
+- `str` — the transcribed text on success
+- `dict` — `{"status": "error", "message": "..."}` on failure
+
+> **Known issue:** The return type is inconsistent (str vs dict on error). The caller
+> should check the type before using the result.
+
 ---
 
-### Step 1: Load the Whisper Model
+### `detect_silence(chunk: np.ndarray, threshold: float) → bool`
+
 ```python
-model = WhisperModel("base", device="cpu", compute_type="default")
+def detect_silence(chunk: np.ndarray, threshold: float):
+    rms = np.sqrt(np.mean(chunk.astype(np.float32) ** 2))
+    return rms < threshold
 ```
 
-**What is Whisper?** An open-source speech recognition model by OpenAI, trained on
-680,000 hours of multilingual audio. It converts speech to text with very high accuracy.
+Returns `True` if the chunk is silent (below the RMS energy threshold).
 
-**What is faster-whisper?** A reimplementation of Whisper using CTranslate2, which is
-a faster inference engine. It runs the same model but faster and with less memory.
+**RMS (Root Mean Square)** is a measure of the average power of an audio signal.
+For silence in a quiet room, RMS is typically < 0.01. During speech, it's much higher.
 
-**Model sizes available:**
+`threshold = 0.01` is a good starting point. You can calibrate it by printing RMS values
+during silence on your specific microphone.
+
+---
+
+### `listen_and_transcribe(block_duration: float) → str`
+
+```python
+def listen_and_transcribe(block_duration):
+    frames = []
+    silent_chunks = 0
+    silent_needed = int(silence_timeout / block_duration)   # = 1.5 / 0.03 = 50 chunks
+    max_chunks    = int(max_duration    / block_duration)   # = 15.0 / 0.03 = 500 chunks
+
+    print("Listening...")
+
+    for _ in range(max_chunks):
+        try:
+            chunk = audio_queue.get(timeout=2.0)
+        except queue.Empty:
+            break
+
+        frames.append(chunk.reshape(-1))
+
+        if detect_silence(chunk, threshold):
+            silent_chunks += 1
+            if silent_chunks >= silent_needed:
+                print("End of speech detected.")
+                break
+        else:
+            silent_chunks = 0  # user still speaking, reset counter
+
+    if not frames:
+        return ""
+
+    audio = np.concatenate(frames).astype(np.float32)
+    return speech_to_text(audio)
+```
+
+#### How silence detection works:
+- Each chunk is checked with `detect_silence()`
+- A counter tracks consecutive silent chunks
+- Once `silent_needed` consecutive silent chunks are seen (default: 50 × 30ms = **1.5 seconds** of silence), recording stops
+- If the user speaks again before the counter reaches `silent_needed`, the counter resets
+
+#### Safety limits:
+- `timeout=2.0` on `queue.get()` — if no audio arrives in 2 seconds, stop (prevents hanging)
+- `max_chunks` — hard cap of 15 seconds of recording regardless of silence
+
+---
+
+## Whisper Model Details
+
+**What is Whisper?** OpenAI's speech recognition model, trained on 680,000 hours of
+multilingual audio. Converts speech to text with high accuracy.
+
+**What is faster-whisper?** A CTranslate2 reimplementation — same model, faster CPU inference.
+
 | Size | Parameters | Relative Speed | Accuracy |
 |---|---|---|---|
 | `tiny` | 39M | Fastest | Lowest |
@@ -58,71 +145,20 @@ a faster inference engine. It runs the same model but faster and with less memor
 | `medium` | 769M | Slow | High |
 | `large` | 1550M | Slowest | Highest |
 
-`"base"` is a good starting point — accurate enough for commands, fast enough for
-real-time use on CPU.
-
-**`device="cpu"`** — runs on CPU, no GPU needed.
-**`compute_type="default"`** — uses the default precision for the device (float32 on CPU).
-
----
-
-### Step 2: Wrap Audio Bytes in a BytesIO Buffer
-```python
-segments, info = model.transcribe(io.BytesIO(audio_data), beam_size=5)
-```
-
-`faster-whisper`'s `transcribe()` method accepts either:
-- A file path (string), or
-- A file-like object (something with `.read()`)
-
-Since we have raw audio bytes in memory (not saved to disk), we wrap them in
-`io.BytesIO()` — this creates an in-memory "file" that `faster-whisper` can read
-without touching the disk.
-
-**`beam_size=5`** — controls the beam search during transcription. A beam size of 5
-means the model tracks 5 candidate transcriptions at once and picks the best one.
+`beam_size=5` — tracks 5 candidate transcriptions at once and picks the best.
 Higher = more accurate but slower.
 
 ---
 
-### Step 3: Extract Text from Segments
-```python
-for segment in segments:
-    text = segment.text
-return text
-```
-
-`transcribe()` returns a **lazy generator** of `Segment` objects. Each segment is a
-chunk of the transcription (e.g., one sentence or phrase) with:
-- `segment.text` — the transcribed text
-- `segment.start` — start timestamp in seconds
-- `segment.end` — end timestamp in seconds
-
-The loop iterates through all segments and overwrites `text` each time, so only the
-**last segment's text** is returned. This works fine for short commands but would need
-to be changed (e.g., `" ".join(...)`) if transcribing longer audio with multiple segments.
-
----
-
-### Step 4: Error Handling
-```python
-except Exception as e:
-    return {"status": "error", "message": f"Error during transcription: {str(e)}"}
-```
-
-If something goes wrong (e.g., corrupt audio data), a dict with the error message is
-returned instead of a string. Note: the caller will need to check the return type to
-handle this correctly.
-
----
-
-## Input / Output
+## Input / Output Summary
 
 | | Type | Description |
 |---|---|---|
-| **Input** | `bytes` | Raw audio data (e.g., from a recorded `.wav` file in memory) |
-| **Output (success)** | `str` | The transcribed text string |
-| **Output (error)** | `dict` | `{"status": "error", "message": "..."}` |
+| `listen_and_transcribe()` input | `float` (block_duration) | Used to calculate silence/max chunk counts |
+| `listen_and_transcribe()` output | `str` | Full transcribed text, or `""` if nothing captured |
+| `speech_to_text()` input | `np.ndarray` | Raw float32 audio samples at 16kHz |
+| `speech_to_text()` output (success) | `str` | Transcribed text |
+| `speech_to_text()` output (error) | `dict` | `{"status": "error", "message": "..."}` |
 
 ---
 
@@ -130,25 +166,21 @@ handle this correctly.
 
 | Issue | Detail |
 |---|---|
-| Model loaded on every call | `WhisperModel(...)` is inside the function, so the model is reloaded from disk each time `speech_to_text()` is called. This is slow. The model should be loaded once at startup and reused. |
-| Only last segment returned | If audio has multiple sentences, only the last one is returned. Fix: join all segments. |
-| No VAD (Voice Activity Detection) | The function transcribes whatever audio bytes it receives — it does not know if the audio contains speech or silence. |
-| Return type inconsistency | Returns a `str` on success but a `dict` on error. Should return consistent types. |
+| Inconsistent return types | `speech_to_text()` returns `str` on success but `dict` on error. Should raise an exception instead. |
+| No VAD (Voice Activity Detection) | Silence is detected by RMS energy only. In noisy environments, background noise may prevent silence detection, causing max-duration cutoff. |
+| Fixed silence threshold | `threshold = 0.01` is hardcoded. Should be moved to config for easy tuning. |
+| Queue not flushed before capture | The orchestrator flushes the queue after wake word detection, but any residual wake-word audio may still appear in the queue briefly. |
 
 ---
 
-## How It Will Be Used (Future)
+## How It Is Used (Current Flow)
 
-Once the orchestrator is built, the flow will be:
 ```
-Wake word detected (wakeup.py)
-        │
-        ▼
-Capture user's command (new module — not yet built)
-        │
-        ▼
-speech_to_text(audio_bytes)  ← this function
-        │
-        ▼
-text string → sent to LLM brain (llm.py — not yet built)
+audio_orchestrator.py:
+    kws()  →  wake word detected
+    flush audio_queue  (discard wake word audio)
+    speak("How can I help you")
+    transcript = listen_and_transcribe(block_duration)
+    print(f"You said: {transcript}")
+    [Future] → send transcript to llm.py
 ```
