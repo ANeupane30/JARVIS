@@ -51,7 +51,7 @@ def divider(cycle: int, label: str):
 
 def run():
     device_stream = start_audio_stream(sample_rate, channels, block_duration)
-
+    speaker_start = speaker.mp_running()
     print("\n" + "="*65)
     print("  TEST ORCHESTRATOR — diagnosing KWS → speak → SR → KWS")
     print("="*65)
@@ -75,7 +75,6 @@ def run():
             log(cycle, "KWS: state after",       tts_state())
 
             # ── STEP 2: terminate previous speech ────────────────────────────
-            log(cycle, "terminate_speaking(): before", tts_state())
             speaker.terminate_speaking()
             log(cycle, "terminate_speaking(): after",  tts_state())
             # ↑ watch: if event stays CLEAR after terminate, speak_and_wait
