@@ -46,7 +46,8 @@ jarvis/
 │
 ├── orchestrator/           ← Wires components into a single run loop
 │   ├── __init__.py
-│   └── audio_orchestrator.py  ✅ Working — main event loop
+│   ├── audio_orchestrator.py  ✅ Working — production main event loop
+│   └── test_orchestrator.py   ✅ Working — diagnostic loop with timing/state logs
 │
 ├── brain/                  ← LLM reasoning and memory (planned)
 │   ├── llm.py              🔲 Empty — LLM connection (planned)
@@ -119,7 +120,9 @@ docs/
     ├── 02_audio_listener.md
     ├── 03_wake_word_detection.md
     ├── 04_speech_to_text.md
-    └── 05_configuration.md
+    ├── 05_configuration.md
+    ├── 06_speaker.md
+    └── 07_audio_orchestrator.md
 ```
 
 ---

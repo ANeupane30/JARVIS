@@ -51,19 +51,21 @@ This roadmap tracks what has been completed, what is in progress, and what is pl
 
 - [x] **Text-to-Speech Speaker** (`jarvis/component/speaker.py`)
   - Implemented using `pyttsx3` (offline, no internet required)
-  - Runs TTS in a separate `multiprocessing.Process` (`speak_worker`) to avoid blocking the audio capture thread
-  - Uses a `multiprocessing.Queue` (`speak_queue`) to decouple the caller from the TTS engine
-  - Exposes `speak(text)`, `mp_running()`, and `terminate_speaking()` functions
-  - `terminate_speaking()` drains the queue and kills the TTS process instantly
+  - Runs TTS in a dedicated `multiprocessing.Process` (`speak_worker`) to avoid blocking the audio capture thread
+  - Uses a `multiprocessing.Queue` (`speak_queue`) and `multiprocessing.Event` (`stop_event`) for inter-process communication
+  - `speak_worker()` re-initialises the `pyttsx3` engine on each utterance to work around the Windows SAPI5 COM stale-state bug
+  - `prewarm()` starts the subprocess at app launch so the first utterance has no cold-start delay
+  - `speak(text)` enqueues text non-blocking; `terminate_speaking()` drains the queue and aborts mid-sentence via the `stop_event`
 
 ---
 
-## 🔲 Phase 3b — Speaker Fixes (In Progress)
-> Resolving known issues with the TTS multiprocessing design.
+## ✅ Phase 3b — Speaker Fixes
+> Resolved known issues with the TTS multiprocessing design.
 
-- [ ] Fix `mp_running()` — `Process()` constructor does not accept a `callback` argument; remove it
-- [ ] Ensure `mp_running()` is called inside `speak()` so the process auto-starts
-- [ ] Test that `terminate_speaking()` correctly allows a fresh process on next `speak()` call
+- [x] Root cause identified: SAPI5 COM SpVoice object goes stale after first `runAndWait()` — subsequent calls produce no audio
+- [x] Fix: re-initialise `pyttsx3.init()` on every utterance inside `speak_worker()` (costs ~150ms, avoids silent audio bug)
+- [x] `prewarm()` added: starts the subprocess at app launch, hiding cold-start latency behind KWS model load time
+- [x] `terminate_speaking()` sets `stop_event` to abort mid-sentence via `on_word` callback; process is kept alive to avoid 5s reload cost
 
 ---
 
@@ -72,10 +74,16 @@ This roadmap tracks what has been completed, what is in progress, and what is pl
 
 - [x] **Audio Orchestrator** (`jarvis/orchestrator/audio_orchestrator.py`)
   - Reads audio config from `config/sounddevice.config`
-  - Starts the mic stream once (`start_audio_stream`)
-  - Main loop: wait for wake word (`kws()`) → flush queue → `listen_and_transcribe()` → print transcript
-  - Calls `speak("How can I help you")` after wake word detection
-  - Handles graceful shutdown on `KeyboardInterrupt`
+  - Starts the mic stream once (`start_audio_stream`) — stream never restarted between KWS and STT
+  - Calls `prewarm()` at startup so TTS subprocess is ready before the first wake word
+  - Main loop: wait for wake word (`kws()`) → flush `audio_queue` (discard wake-word audio) → `speak("How can I help you")` → `listen_and_transcribe()` → print transcript
+  - Handles graceful shutdown on `KeyboardInterrupt` with `finally: stream.stop() + stream.close()`
+
+- [x] **Diagnostic Orchestrator** (`jarvis/orchestrator/test_orchestrator.py`)
+  - Drop-in replacement for `audio_orchestrator.py` used during debugging
+  - Logs timestamps, cycle numbers, TTS process state, and `audio_queue` depth at every step
+  - Helper functions: `log()`, `tts_state()`, `audio_state()`, `divider()`
+  - Calls `terminate_speaking()` before each greeting to handle mid-speech interrupts
 
 - [x] **Main Entry Point** (`main.py`)
   - Imports and calls `run()` from `jarvis.orchestrator.audio_orchestrator`
