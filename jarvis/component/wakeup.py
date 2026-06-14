@@ -1,7 +1,7 @@
 import sherpa_onnx
 import configparser
 import queue
-from listener import start_audio_stream, audio_queue
+from jarvis.component.listener import audio_queue
 
 
 # initializing configparser
@@ -69,6 +69,6 @@ def kws():
         result = keyword_spotter.get_result(kws_stream)
         
         if result:
-            return result
+            return True
                 # kws_stream = keyword_spotter.create_stream()
 

@@ -14,7 +14,7 @@ built-in `configparser` module. This keeps settings separate from source code.
 import configparser
 
 config = configparser.ConfigParser()
-config.read("config/sounddevice.config")  # read the file
+config.read("config/sounddevice.config")   # read the file
 
 value = config['section_name']['KEY_NAME']  # access a value
 ```
@@ -31,40 +31,47 @@ All values are read as **strings** by default. The code manually converts them:
 - `float(config['kws']['KEYWORD_SCORE'])` → float
 - `str(config['kws']['TOKEN'])` → string (explicit, for clarity)
 
+> **Multiple files can be read by the same `ConfigParser` instance.** In `wakeup.py`,
+> both `sherpa_onnx.config` and `sounddevice.config` are read into the same `config`
+> object, so all sections from both files are accessible.
+
 ---
 
 ## `config/sounddevice.config`
 
-Used by: `modules/voice/listener.py`
+Used by: `jarvis/component/listener.py` (indirectly), `jarvis/orchestrator/audio_orchestrator.py`, `jarvis/component/wakeup.py`
 
 ```ini
-[audio]
+[kws_audio]
 SAMPLE_RATE = 16000
 BLOCK_DURATION = 0.03
 CHANNELS = 1
 ```
 
+> **Note:** The section is `[kws_audio]`, not `[audio]`. All code that reads this file
+> accesses `config['kws_audio']`.
+
 | Key | Value | Meaning |
 |---|---|---|
-| `SAMPLE_RATE` | `16000` | 16,000 audio samples per second (16 kHz). This is the standard for speech recognition models — both sherpa-onnx and faster-whisper were trained on 16kHz audio. If you change this, the models will not work correctly. |
-| `BLOCK_DURATION` | `0.03` | Each audio chunk is 30 milliseconds long. At 16kHz, this means each chunk = 16000 × 0.03 = **480 samples**. Smaller blocks = lower latency. Larger blocks = less CPU overhead. 30ms is a standard choice for real-time KWS. |
-| `CHANNELS` | `1` | Mono audio (1 channel). Stereo (2 channels) is not needed for speech recognition and would double the data size. |
+| `SAMPLE_RATE` | `16000` | 16,000 audio samples per second (16 kHz). Both sherpa-onnx and faster-whisper were trained on 16kHz audio. Changing this will break the models. |
+| `BLOCK_DURATION` | `0.03` | Each audio chunk is 30 milliseconds. At 16kHz: 16000 × 0.03 = **480 samples** per chunk. Smaller = lower latency. Larger = less CPU overhead. 30ms is standard for real-time KWS. |
+| `CHANNELS` | `1` | Mono audio (1 channel). Stereo is unnecessary for speech recognition and doubles data size. |
 
 ---
 
 ## `config/sherpa_onnx.config`
 
-Used by: `modules/voice/wakeup.py`
+Used by: `jarvis/component/wakeup.py`
 
 ```ini
 [kws]
 SAMPLE_RATE = 16000
-MODEL_DIR = sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01
-TOKEN = sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01/tokens.txt
-ENCODER = sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01/encoder-epoch-12-avg-2-chunk-16-left-64.onnx
-DECODER = sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01/decoder-epoch-12-avg-2-chunk-16-left-64.onnx
-JOINER = sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01/joiner-epoch-12-avg-2-chunk-16-left-64.onnx
-KEYWORDS_FILE = sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01/keywords.txt
+MODEL_DIR = model\kws-zipformer
+TOKEN = model/kws-zipformer/tokens.txt
+ENCODER = model/kws-zipformer/encoder-epoch-12-avg-2-chunk-16-left-64.onnx
+DECODER = model/kws-zipformer/decoder-epoch-12-avg-2-chunk-16-left-64.onnx
+JOINER = model/kws-zipformer/joiner-epoch-12-avg-2-chunk-16-left-64.onnx
+KEYWORDS_FILE = model/kws-zipformer/keywords.txt
 KEYWORD_SCORE = 1.0
 KEYWORD_THRESHOLD = 0.25
 PROVIDER = cpu
@@ -77,39 +84,44 @@ NUM_TRAILING_BLANKS = 8
 
 | Key | Meaning |
 |---|---|
-| `MODEL_DIR` | Root folder of all model files (used for reference, not directly read by code) |
-| `TOKEN` | Path to `tokens.txt` — a vocabulary file mapping integers to characters (e.g., 42 → "h") |
-| `ENCODER` | Path to the encoder ONNX model — converts raw audio features into a high-level representation |
+| `MODEL_DIR` | Root folder of all model files (reference only — not read directly by code) |
+| `TOKEN` | Path to `tokens.txt` — vocabulary file mapping integers to characters (e.g., 42 → "h") |
+| `ENCODER` | Path to the encoder ONNX model — converts raw audio features into high-level representations |
 | `DECODER` | Path to the decoder ONNX model — predicts the next character/token given encoder outputs |
-| `JOINER` | Path to the joiner ONNX model — combines encoder and decoder outputs to produce the final prediction |
+| `JOINER` | Path to the joiner ONNX model — combines encoder and decoder outputs for final prediction |
+| `KEYWORDS_FILE` | Path to `keywords.txt` — one wake word or phrase per line |
 
-All three (encoder, decoder, joiner) are required. Together they form the full Zipformer
+All three (encoder, decoder, joiner) are required. Together they form the Zipformer
 transducer model. The filename `epoch-12-avg-2-chunk-16-left-64` tells you:
 - Trained for 12 epochs, averaged over 2 checkpoints
 - Chunk size of 16 frames (streaming chunk)
 - Left context of 64 frames
 
+> **Path format note:** `MODEL_DIR` uses a backslash (`model\kws-zipformer`) for Windows
+> display purposes only. The actual file path keys use forward slashes, which work on
+> both Windows and Linux in Python's `open()` and ONNX Runtime.
+
 ### Detection Tuning Parameters
 
 | Key | Value | Meaning |
 |---|---|---|
-| `SAMPLE_RATE` | `16000` | Must match the audio capture rate — same as sounddevice.config |
-| `KEYWORD_SCORE` | `1.0` | A score multiplier applied to keyword tokens during decoding. Higher values make the model more likely to detect the keyword (more sensitive). Lower = harder to trigger (fewer false positives). |
-| `KEYWORD_THRESHOLD` | `0.25` | The minimum confidence required to confirm a detection. Range is 0.0–1.0. `0.25` means 25% confidence is enough. Lower = more sensitive (more false positives). Higher = stricter (might miss quiet speech). |
-| `NUM_TRAILING_BLANKS` | `8` | The number of consecutive silence/blank frames that must follow the keyword before it is confirmed. This prevents partial word matches. 8 frames × 30ms = 240ms of silence required after the keyword. |
-| `PROVIDER` | `cpu` | Which hardware to run inference on. `cpu` uses ONNX Runtime on CPU. Could be `cuda` for NVIDIA GPU or `coreml` for Apple Silicon. |
-| `NUM_THREADS` | `1` | Number of CPU threads for the ONNX model. 1 is fine for a 3.3M model. Increase if inference is slow. |
-| `MAX_ACTIVE_PATHS` | `4` | Beam size for beam search — how many candidate transcriptions the decoder tracks at once. 4 is a good balance between accuracy and speed. |
+| `SAMPLE_RATE` | `16000` | Must match the audio capture rate in `sounddevice.config` |
+| `KEYWORD_SCORE` | `1.0` | Score multiplier applied to keyword tokens during decoding. Higher = more sensitive (more false positives). |
+| `KEYWORD_THRESHOLD` | `0.25` | Minimum confidence to confirm a detection. Range 0.0–1.0. `0.25` = 25% confidence needed. |
+| `NUM_TRAILING_BLANKS` | `8` | Consecutive silence frames required after the keyword. 8 × 30ms = **240ms** of silence required. Prevents partial word matches. |
+| `PROVIDER` | `cpu` | ONNX Runtime execution provider. `cpu` uses CPU. Could be `cuda` (NVIDIA) or `coreml` (Apple Silicon). |
+| `NUM_THREADS` | `1` | CPU threads for the ONNX model. 1 is fine for a 3.3M model. Increase if inference is slow. |
+| `MAX_ACTIVE_PATHS` | `4` | Beam size — how many candidate transcriptions the decoder tracks at once. 4 balances accuracy and speed. |
 
 ---
 
 ## `.env` and `.env.example`
 
-Not read by `configparser` — these are environment variables read at runtime.
+Not read by `configparser` — these are environment variables loaded at runtime.
 
 **`.env.example`** (template, safe to commit):
 ```
-BOT_NAME=JARVIS
+BOT_NAME=JARVIS <-- Change this if you prefer to call your AI by another name
 USER_NAME=Enter_Your_Name
 ```
 
@@ -119,21 +131,46 @@ BOT_NAME=JARVIS
 USER_NAME=Aseem
 ```
 
-These will be used by the brain/orchestrator modules once they are implemented —
+These will be used by the brain/orchestrator modules once implemented —
 for example, so JARVIS can address you by name in responses.
 
 ---
 
-## How to Tune the Wake Word Detection
+## How to Tune Wake Word Detection
 
-If JARVIS triggers too often (false positives):
-- Increase `KEYWORD_THRESHOLD` (e.g., `0.4` or `0.5`)
-- Increase `NUM_TRAILING_BLANKS` (e.g., `12`)
-- Decrease `KEYWORD_SCORE` (e.g., `0.8`)
+**JARVIS triggers too often (false positives):**
+```ini
+KEYWORD_THRESHOLD = 0.4       ; increase from 0.25 (stricter)
+NUM_TRAILING_BLANKS = 12      ; increase from 8 (more silence required)
+KEYWORD_SCORE = 0.8           ; decrease from 1.0 (less boost)
+```
 
-If JARVIS misses the wake word (false negatives):
-- Decrease `KEYWORD_THRESHOLD` (e.g., `0.15`)
-- Increase `KEYWORD_SCORE` (e.g., `1.5`)
-- Decrease `NUM_TRAILING_BLANKS` (e.g., `4`)
+**JARVIS misses the wake word (false negatives):**
+```ini
+KEYWORD_THRESHOLD = 0.15      ; decrease from 0.25 (more permissive)
+KEYWORD_SCORE = 1.5           ; increase from 1.0 (more boost)
+NUM_TRAILING_BLANKS = 4       ; decrease from 8 (less silence required)
+```
 
-No code changes needed — just edit the values in `config/sherpa_onnx.config`.
+No code changes needed — just edit `config/sherpa_onnx.config`.
+
+---
+
+## How to Tune Silence Detection (Transcriber)
+
+The silence detection threshold in `jarvis/component/transcriber.py` is currently hardcoded:
+
+```python
+silence_timeout: float = 1.5   # seconds of silence to stop recording
+max_duration:    float = 15.0  # maximum recording length
+threshold:       float = 0.01  # RMS energy below this = silence
+```
+
+To calibrate `threshold`, add a temporary print statement to see actual RMS values
+during silence on your microphone:
+```python
+rms = np.sqrt(np.mean(chunk.astype(np.float32) ** 2))
+print(f"RMS: {rms:.6f}")
+```
+
+Set `threshold` slightly above your ambient silence RMS.

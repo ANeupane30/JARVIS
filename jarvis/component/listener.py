@@ -2,7 +2,7 @@ import sounddevice as sd
 import queue
 
 """
-For now this file contains two function audio_callback() and process_audio_stream(). audio_callback()
+This file contains two function audio_callback() and process_audio_stream(). audio_callback()
 stores short audio clips in queue for processing. Where as process_audio_stream() starts the stream once
 and sounddevice's background thread runs continuously in background and collect the audio clip. 
 """
