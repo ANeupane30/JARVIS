@@ -1,2 +1,6 @@
 .venv
 .env
+jarvis\__pycache__
+jarvis\brain\__pycache__
+jarvis\component\__pycache__
+jarvis\orchestrator\__pycache__
