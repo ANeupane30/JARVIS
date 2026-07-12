@@ -9,10 +9,10 @@ This roadmap tracks what has been completed, what is in progress, and what is pl
 > Setting up the project structure, environment, and tooling.
 
 - [x] Initialize Git repository
-- [x] Set up Python virtual environment (`.venv`)
-- [x] Create `requirements.txt` with all dependencies
-- [x] Set up `.env` and `.env.example` for environment variables (`BOT_NAME`, `USER_NAME`)
-- [x] Create folder structure (`jarvis/`, `jarvis/component/`, `jarvis/orchestrator/`, `jarvis/brain/`, `jarvis/skills/`, `config/`, `model/`, `docs/`, `tests/`, `scripts/`, `integrations/`, `interface/`)
+- [x] Set up Python virtual environment (`.venv`) using `uv`
+- [x] Create `pyproject.toml` with all dependencies (migrated from `requirements.txt`)
+- [x] Set up `.env` and `.env.example` for environment variables (`BOT_NAME`, `USER_NAME`, `OPENROUTER_API_KEY`)
+- [x] Create folder structure (`jarvis/`, `jarvis/component/`, `jarvis/orchestrator/`, `jarvis/brain/`, `jarvis/skills/`, `config/`, `model/`, `docs/`, `tests/`, `scripts/`, `integrations/`, `interface/`, `mcp_server/`)
 - [x] Write setup scripts for Windows (`scripts/setup.ps1`) and Linux/macOS (`scripts/setup.sh`)
 - [x] Write `docs/setup.md` — installation and configuration guide
 - [x] Write `docs/guide.md` — library reference and tool decisions
@@ -76,7 +76,7 @@ This roadmap tracks what has been completed, what is in progress, and what is pl
   - Reads audio config from `config/sounddevice.config`
   - Starts the mic stream once (`start_audio_stream`) — stream never restarted between KWS and STT
   - Calls `prewarm()` at startup so TTS subprocess is ready before the first wake word
-  - Main loop: wait for wake word (`kws()`) → flush `audio_queue` (discard wake-word audio) → `speak("How can I help you")` → `listen_and_transcribe()` → print transcript
+  - Main loop: wait for wake word (`kws()`) → flush `audio_queue` (discard wake-word audio) → `speak("How can I help you")` → `listen_and_transcribe()` → send to LLM → speak response
   - Handles graceful shutdown on `KeyboardInterrupt` with `finally: stream.stop() + stream.close()`
 
 - [x] **Diagnostic Orchestrator** (`jarvis/orchestrator/test_orchestrator.py`)
@@ -86,32 +86,59 @@ This roadmap tracks what has been completed, what is in progress, and what is pl
   - Calls `terminate_speaking()` before each greeting to handle mid-speech interrupts
 
 - [x] **Main Entry Point** (`main.py`)
+  - Windows DLL path fix for `onnxruntime` / `sherpa_onnx` loaded before imports
   - Imports and calls `run()` from `jarvis.orchestrator.audio_orchestrator`
 
 ---
 
-## 🔲 Phase 5 — Brain / Intelligence
+## ✅ Phase 5 — Brain / Intelligence
 > Connecting JARVIS to an LLM for reasoning and conversation.
 
-- [ ] **LLM Integration** (`jarvis/brain/llm.py`) — file exists, currently empty
-  - Connect to a language model (local or API-based)
-  - Send transcribed user input and receive a response
+- [x] **LLM Integration** (`jarvis/brain/llm.py`)
+  - Connects to OpenRouter API (`https://openrouter.ai/api/v1/responses`)
+  - Uses `openai/o4-mini` model with up to 9,000 output tokens
+  - `llm_response(text)` sends transcript and returns raw JSON response dict
+  - API key loaded from `.env` via `python-decouple`
+
+- [x] **Response Formatter** (`jarvis/component/response_formatter.py`)
+  - `complete_json_response(data)` parses OpenRouter response JSON
+  - Extracts the first text message from `output[].content[].text`
 
 - [ ] **Memory System** (`jarvis/brain/memory.py`) — file exists, currently empty
   - Implement short-term conversation history (context window)
   - Consider long-term memory storage for user preferences
 
 - [ ] **Response Handler** (`jarvis/brain/response.py`) — file exists, currently empty
-  - Post-process LLM output before passing to `speak()`
+  - Post-process LLM output before passing to `speak()` (cleaning, chunking for TTS)
 
 ---
 
-## 🔲 Phase 6 — Full Orchestration Loop
+## ✅ Phase 6 — Full Orchestration Loop
 > Connecting transcription → brain → speaker in `audio_orchestrator.py`.
 
-- [ ] Wire `listen_and_transcribe()` output into `llm.py`
-- [ ] Pass LLM response through `response.py` and into `speak()`
-- [ ] Handle edge cases: empty transcript, LLM errors, TTS process not alive
+- [x] Wire `listen_and_transcribe()` output into `llm_response()` from `llm.py`
+- [x] Parse LLM JSON response via `complete_json_response()` from `response_formatter.py`
+- [x] Pass parsed LLM response text into `speak()`
+- [x] Basic edge case handling: empty transcript returns to KWS loop without LLM call
+
+---
+
+## ✅ Phase 6b — MCP (Model Context Protocol) Infrastructure
+> Giving JARVIS the ability to call external tools via a standardised protocol.
+
+- [x] **MCP Server** (`mcp_server/server.py`)
+  - Implements the MCP server protocol using the low-level `mcp` library
+  - Runs as a subprocess communicating via stdio
+  - Exposes a `get_weather` tool (stub returning fake data — real integration planned)
+  - Server name: `jarvis-server`, version `0.1.0`
+
+- [x] **MCP Client** (`jarvis/brain/mcp_client.py`)
+  - `MCPClient` class bridges async MCP protocol to synchronous JARVIS code
+  - Spins up a dedicated background asyncio event loop on a daemon thread
+  - `connect()` — starts the MCP server subprocess and initialises the session
+  - `get_tools()` — returns available tools in Anthropic API format (`name`, `description`, `input_schema`)
+  - `call_tool(name, arguments)` — synchronously dispatches a tool call and returns the text result
+  - Module-level singleton `mcp_client = MCPClient()` for easy reuse
 
 ---
 
@@ -120,12 +147,24 @@ This roadmap tracks what has been completed, what is in progress, and what is pl
 
 - [ ] Design a skill system / plugin architecture (`jarvis/skills/`)
 - [ ] Implement starter skills (e.g., time/date, open apps, web search)
-- [ ] Connect skills to the orchestrator via intent detection
+- [ ] Connect skills to the orchestrator via intent detection or LLM tool calling
+- [ ] Wire MCP tool results into the LLM context (tool-use loop)
+- [ ] Implement real `get_weather` tool in `mcp_server/server.py` (replace stub)
 - [ ] `jarvis/skills/example1_skill1.py` exists as a placeholder
 
 ---
 
-## 🔲 Phase 8 — Integrations & Interface
+## 🔲 Phase 8 — Memory & Context
+> Making JARVIS remember conversations.
+
+- [ ] Implement `jarvis/brain/memory.py` — short-term conversation history (rolling context window)
+- [ ] Implement `jarvis/brain/response.py` — response cleanup (strip markdown, handle long responses)
+- [ ] Pass conversation history into LLM calls for multi-turn dialogue
+- [ ] Optional: long-term memory storage (user preferences, facts)
+
+---
+
+## 🔲 Phase 9 — Integrations & Interface
 > Connecting JARVIS to external services and adding a UI.
 
 - [ ] External API integrations (`integrations/`)
@@ -134,10 +173,11 @@ This roadmap tracks what has been completed, what is in progress, and what is pl
 
 - [ ] User interface (`interface/`)
   - Optional visual interface (GUI or web dashboard)
+  - Potential: FastAPI/Starlette web server (`uvicorn` already a dependency)
 
 ---
 
-## 🔲 Phase 9 — Testing & Quality
+## 🔲 Phase 10 — Testing & Quality
 > Making sure everything works reliably.
 
 - [ ] Write unit tests (`tests/unit/`)
@@ -148,8 +188,9 @@ This roadmap tracks what has been completed, what is in progress, and what is pl
 ---
 
 ## Notes
-- The project has been restructured from `modules/` into the `jarvis/` Python package.
+- Project uses `uv` for dependency management (`pyproject.toml` + `uv.lock`), not `pip`/`requirements.txt`.
 - `integrations/` and `interface/` directories are created but intentionally left empty until later phases.
-- The KWS model files are stored under `model/kws-zipformer/` (not `sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01/` as originally planned).
-- `jarvis/brain/` has stub files (`llm.py`, `memory.py`, `response.py`) — all currently empty.
-- Libraries previously considered but replaced: `vosk`, `SpeechRecognition`, `python-decouple`, `requests` — see `docs/guide.md` for details.
+- The KWS model files are stored under `model/kws-zipformer/`.
+- `jarvis/brain/memory.py` and `jarvis/brain/response.py` are still empty stubs.
+- MCP infrastructure (`mcp_client.py`, `mcp_server/server.py`) is implemented but not yet wired into the LLM tool-use loop.
+- Windows DLL loading order fix in `main.py` ensures the venv's `onnxruntime` is loaded before `sherpa_onnx` can pull the System32 DLL.

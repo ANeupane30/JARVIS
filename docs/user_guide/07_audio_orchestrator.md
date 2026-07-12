@@ -5,17 +5,17 @@
 - `jarvis/orchestrator/test_orchestrator.py` — diagnostic run loop with timing and state logging
 
 **Status:** ✅ Working
-**Depends on:** `listener.py`, `wakeup.py`, `transcriber.py`, `speaker.py`
+**Depends on:** `listener.py`, `wakeup.py`, `transcriber.py`, `speaker.py`, `llm.py`, `response_formatter.py`
 
 ---
 
 ## What This Module Does
 
-The orchestrator is the **conductor** — it wires all four components together into a
+The orchestrator is the **conductor** — it wires all components together into a
 continuous voice interaction loop:
 
 ```
-Mic → [KWS] → flush queue → speak greeting → [STT] → print transcript → repeat
+Mic → [KWS] → flush queue → speak greeting → [STT] → [LLM] → speak response → repeat
 ```
 
 It owns:
@@ -52,16 +52,27 @@ def run():
 
     try:
         while True:
-            keyword = kws()                        # STEP 1: block until wake word
+            keyword = kws()                          # STEP 1: block until wake word
             print("KWS Detected")
-            speak("How can I help you")            # STEP 2: non-blocking speak
+            speak("How can I help you")              # STEP 2: non-blocking speak
+            llm_call = True
 
-            while not audio_queue.empty():         # STEP 3: flush wake-word audio
+            while not audio_queue.empty():           # STEP 3: flush wake-word audio
                 try: audio_queue.get_nowait()
                 except q.Empty: break
 
-            transcript = listen_and_transcribe(block_duration)  # STEP 4: STT
-            print(f"You said: {transcript}")
+            while llm_call:                          # STEP 4: STT + LLM
+                transcript = listen_and_transcribe(block_duration)
+                if not transcript or not transcript.strip():
+                    print("No speech detected, returning to KWS")
+                    llm_call = False
+                    continue
+                print(f"You said: {transcript}")
+                data = llm_response(transcript)      # STEP 5: call LLM
+                llm_result = complete_json_response(data)  # STEP 6: parse response
+                print(llm_result)
+                speak(llm_result)                    # STEP 7: speak response
+                llm_call = False
 
     except KeyboardInterrupt:
         print("Stopping.")
@@ -80,7 +91,10 @@ def run():
 | `speak("How can I help you")` | Enqueues greeting text | Non-blocking — TTS worker handles it asynchronously |
 | Queue flush | Discards wake-word audio | Prevents Whisper from transcribing "Hey JARVIS" as the user command |
 | `listen_and_transcribe()` | Records until silence, then transcribes | Uses the same `audio_queue` as KWS |
-| `print(transcript)` | Outputs the result | Future: will be sent to `llm.py` |
+| Empty transcript check | Returns to KWS if nothing captured | Prevents sending blank input to LLM |
+| `llm_response(transcript)` | Sends text to OpenRouter API | Synchronous HTTP POST — blocks until response received |
+| `complete_json_response(data)` | Parses JSON → plain text | Extracts `output[].content[].text` from OpenRouter format |
+| `speak(llm_result)` | Enqueues response for TTS | Non-blocking — user hears response while loop resets |
 
 #### Why the queue flush matters
 
@@ -126,7 +140,7 @@ def tts_state() -> str:
     proc      = speaker.tts_process
     alive     = proc is not None and proc.is_alive()
     pid       = proc.pid if proc is not None else "none"
-    event_set = speaker.event.is_set()
+    event_set = speaker.stop_event.is_set()
     qsize     = speaker.speak_queue.qsize()
     return f"process={'ALIVE' if alive else 'DEAD '} pid={str(pid):<6} | event={'SET  ' if event_set else 'CLEAR'} | speak_q={qsize}"
 ```
@@ -163,8 +177,8 @@ Each step is logged before and after with `tts_state()` and `audio_state()` so y
 see exactly what the system state was at each moment.
 
 > **Note:** `test_orchestrator.py` references `speaker.speak_and_wait()` and `speaker.mp_running()`
-> which are planned but not yet fully implemented in `speaker.py`. These will need to be
-> added to `speaker.py` before `test_orchestrator.py` can run without errors.
+> which are not yet implemented in `speaker.py`. The test orchestrator is a diagnostic scaffold
+> for iterating on the speaker design, not a runnable replacement for production.
 
 ---
 
@@ -176,6 +190,7 @@ see exactly what the system state was at each moment.
 | Stream started once, never restarted | Restarting `sounddevice` streams introduces ~100ms gaps; continuous stream is seamless |
 | `prewarm()` called before the loop | Hides TTS cold-start latency behind KWS model loading time |
 | Queue flush after KWS detection | Prevents wake-word audio leaking into STT |
+| LLM call is synchronous (blocks) | JARVIS must not speak the response until it has the full text — async would complicate TTS sequencing |
 | `test_orchestrator.py` as separate file | Keeps production code clean while enabling detailed diagnostics without modifying `audio_orchestrator.py` |
 
 ---
@@ -197,9 +212,10 @@ from jarvis.orchestrator.test_orchestrator import run
 
 ---
 
-## Future: Full Brain Loop
+## Future: MCP Tool-Use Loop
 
-Once `jarvis/brain/llm.py` is implemented, the orchestrator loop will extend to:
+Once `mcp_client.py` is wired into the LLM call, the orchestrator's LLM step will become
+a multi-turn tool-use loop:
 
 ```python
 while True:
@@ -207,6 +223,15 @@ while True:
     speak("How can I help you")
     flush_queue()
     transcript = listen_and_transcribe(block_duration)
-    response   = llm.generate(transcript)       # ← Phase 5
-    speak(response)                             # ← Phase 6
+    
+    # Tool-use loop
+    messages = [{"role": "user", "content": transcript}]
+    while True:
+        response = llm_response_with_tools(messages, mcp_client.get_tools())
+        if response.stop_reason == "tool_use":
+            tool_result = mcp_client.call_tool(name, args)
+            messages.append({"role": "tool", "content": tool_result})
+        else:
+            speak(response.text)
+            break
 ```

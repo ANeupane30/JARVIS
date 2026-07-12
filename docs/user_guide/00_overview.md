@@ -20,6 +20,7 @@ so you can come back after a break and immediately understand what's happening.
 | [05_configuration.md](05_configuration.md) | How config files work and what each setting does |
 | [06_speaker.md](06_speaker.md) | Multiprocess TTS design (`speaker.py`) |
 | [07_audio_orchestrator.md](07_audio_orchestrator.md) | Main event loop + diagnostic orchestrator |
+| [08_brain.md](08_brain.md) | LLM integration, MCP client, and response formatting |
 
 ---
 
@@ -28,6 +29,7 @@ so you can come back after a break and immediately understand what's happening.
 ```
 App startup
     │
+    ├── DLL preload (Windows: onnxruntime before sherpa_onnx)
     ├── start_audio_stream()   ← mic stream starts once, runs forever
     └── prewarm()              ← TTS subprocess starts while KWS model loads
 
@@ -63,16 +65,28 @@ listener.py ──► audio_queue (thread-safe Queue)
              │
              ▼
        transcript string
-       (printed to console)
              │
              ▼
-    [Future] llm.py → response.py → speak(response)
+       jarvis/brain/llm.py
+       llm_response(transcript)
+       OpenRouter API → openai/o4-mini
+             │
+             ▼
+   response_formatter.py
+   complete_json_response(data)
+   extracts text from JSON
+             │
+             ▼
+       speak(llm_result)
+       (non-blocking → TTS subprocess)
+             │
+             ▼
+     [returns to KWS loop]
 ```
 
-> **Note:** The LLM brain (`jarvis/brain/llm.py`, `memory.py`, `response.py`) and
-> the connection from transcript → brain → speaker are not yet implemented.
-> The speaker (`jarvis/component/speaker.py`) IS implemented — it runs in a dedicated
-> subprocess and says "How can I help you" after each wake word detection.
+> **MCP Note:** `jarvis/brain/mcp_client.py` and `mcp_server/server.py` are implemented
+> but not yet wired into the main loop. The MCP tool-use loop (LLM calls a tool → gets
+> result → responds) is the next integration milestone.
 
 ---
 
@@ -83,18 +97,23 @@ The project uses the `jarvis` Python package (importable via `import jarvis`):
 ```
 jarvis/
 ├── __init__.py
-├── component/         ← Low-level hardware modules
-│   ├── listener.py    ✅ Working — mic capture
-│   ├── wakeup.py      ✅ Working — wake word detection
-│   ├── transcriber.py ✅ Working — silence-aware STT
-│   └── speaker.py     ✅ Working — multiprocess TTS (pyttsx3 + SAPI5)
-├── orchestrator/      ← Wires components into a loop
-│   ├── audio_orchestrator.py  ✅ Working — production main loop
+├── component/              ← Low-level hardware/IO modules
+│   ├── listener.py         ✅ Working — mic capture
+│   ├── wakeup.py           ✅ Working — wake word detection
+│   ├── transcriber.py      ✅ Working — silence-aware STT
+│   ├── speaker.py          ✅ Working — multiprocess TTS (pyttsx3 + SAPI5)
+│   └── response_formatter.py  ✅ Working — parses OpenRouter JSON responses
+├── orchestrator/           ← Wires components into a loop
+│   ├── audio_orchestrator.py  ✅ Working — production main loop (includes LLM call)
 │   └── test_orchestrator.py   ✅ Working — diagnostic loop with timing logs
-├── brain/             ← LLM reasoning and memory
-│   ├── llm.py         🔲 Empty — planned
-│   ├── memory.py      🔲 Empty — planned
-│   └── response.py    🔲 Empty — planned
-└── skills/            ← Specific capabilities
+├── brain/                  ← LLM reasoning and memory
+│   ├── llm.py              ✅ Working — OpenRouter API integration
+│   ├── mcp_client.py       ✅ Implemented — MCP client (not yet wired into loop)
+│   ├── memory.py           🔲 Empty — planned
+│   └── response.py         🔲 Empty — planned
+└── skills/                 ← Specific capabilities
     └── example1_skill1.py  🔲 Placeholder
+
+mcp_server/
+└── server.py               ✅ Implemented — MCP server with get_weather stub
 ```
