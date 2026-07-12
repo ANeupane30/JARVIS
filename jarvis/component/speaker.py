@@ -34,9 +34,14 @@ def speak_worker(q, stop_sig):
     """
     while True:
         try:
+            SHUTDOWN = '__TTS_SHUTDOWN__'
+            
             # Wait for text (timeout allows checking for process shutdown)
             text = q.get(timeout=1) 
-            if text is None: break
+            if text == SHUTDOWN:
+                break
+            if not isinstance(text, str) or not text.strip():
+                continue
             
             # Init engine ONCE at start of process life
             engine = pyttsx3.init()

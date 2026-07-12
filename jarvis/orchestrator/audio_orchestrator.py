@@ -45,6 +45,10 @@ def run():
             # sr reads from the same audio_queue
             while llm_call:
                 transcript = listen_and_transcribe(block_duration)
+                if not transcript or not transcript.strip():
+                    print("No speech detected, returning to KWS")
+                    llm_call = False
+                    continue
                 print(f"You said: {transcript}")
                 data = llm_response(transcript)
                 llm_result = complete_json_response(data)
